@@ -1,0 +1,95 @@
+---
+title: "TCGA expression analysis"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(openxlsx)
+library(ggplot2)
+library(pheatmap)
+```
+
+# Overview
+This notebook analyzes expression patterns for a set of genes from TCGA
+
+## Data
+
+The tool [firehost_get](https://confluence.broadinstitute.org/display/GDAC/Download) was used to download TCGA expression data from the Broad GDAC and the files were unpacked into the folder `tcga`.
+
+```{bash download_tcga, eval=FALSE}
+cd raw
+mkdir tcga && cd tcga
+
+firehose_get -o RSEM_genes_normalized data latest
+
+for cohort in `ls stddata__2016_07_15/`; do
+
+  tar -xzf stddata__2016_07_15/$cohort/20160715/*illuminahiseq*RSEM_genes_normalized__data.Level_3.*.tar.gz \
+      -C stddata__2016_07_15/$cohort/20160715/
+
+done
+```
+
+The data matrices for each cohort were loaded and combined into a list containing all cohorts. The list of matrices was cached as an RDS object to `./raw/rsem_normalized.rds`.
+
+```{r read_tcga, eval=FALSE}
+fpath_template <- './raw/tcga/stddata__2016_07_15/%s/20160715/gdac.broadinstitute.org_%s.Merge_rnaseqv2__illuminahiseq_rnaseqv2__unc_edu__Level_3__RSEM_genes_normalized__data.Level_3.2016071500.0.0/%s.rnaseqv2__illuminahiseq_rnaseqv2__unc_edu__Level_3__RSEM_genes_normalized__data.data.txt'
+
+cohorts <- list.files('./raw/tcga/stddata__2016_07_15')
+
+with_data <- sapply(cohorts, function(cohort) {
+  sprintf(fpath_template, cohort, cohort, cohort) %>% 
+    file.exists
+})
+
+cohorts <- cohorts[with_data]
+  
+read_rnaseq <- function(cohort) {
+  fpath <- sprintf(fpath_template, cohort, cohort, cohort)
+  headers <- strsplit(readLines(fpath, 1), "\t")[[1]]
+  
+  read_tsv(fpath, skip=2, col_types=cols(), col_names = headers) %>%
+    separate(`Hybridization REF`, c('gene_symbol', 'entrez_id'), sep='\\|')
+}
+
+rnaseq_mats <- lapply(cohorts, read_rnaseq)
+names(rnaseq_mats) <- cohorts
+
+write_rds(rnaseq_mats, '../raw/rsem_normalized.rds')
+```
+
+The RNA-seq dataset from TCGA contains expression patterns of 20,531 genes, across 37 cohorts. Each cohort has a varying number of patients.
+
+```{r tcga_stats}
+rnaseq_mats <- readRDS('../raw/rsem_normalized.rds')
+cohorts <- names(rnaseq_mats)
+
+cat('Number of genes:\n')
+nrow(rnaseq_mats[[1]])
+cat('Number of patients per cohort:\n')
+lapply(rnaseq_mats, function(mat) ncol(mat) - 2) %>% as.data.frame %>% t()
+```
+
+## Analysis
+
+
+## Appendix
+
+The TCGA samples are labelled with a [TCGA barcode](https://wiki.nci.nih.gov/display/TCGA/TCGA+barcode), which indicate whether a sample was tumour, a normal tissue, or a control. Specifically "Tumor types range from 01 - 09, normal types from 10 - 19 and control samples from 20 - 29." Around 7% of the dataset was generated using normal tissue, which will not affect the gene expression clustering.
+
+```{r appendix}
+barcode <- colnames(tgca_mat)
+
+split <- sapply(barcode, function(x) strsplit(x, split = '-'))
+sample <- sapply(split, function(x) x[4])
+
+table(sample)
+```
+

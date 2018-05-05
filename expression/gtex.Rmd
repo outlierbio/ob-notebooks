@@ -1,0 +1,138 @@
+---
+title: "GTEx expression analysis"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(ggplot2)
+library(preprocessCore)
+library(pheatmap)
+library(tidyverse)
+```
+
+Analysis of gene expression in GTEx
+
+# Overview
+
+This notebook explores the expression levels and cell-type specificity of a list of genes in the GTEx dataset of gene expression from RNA-seq of >50 normal human tissues.
+
+# Load GTEx data
+The GTEx dataset we're using has one value (the median over samples) per tissue type and gene. Load and convert to an R matrix. The file `GTEx_Analysis_2016-01-15_v7_RNASeQCv1.1.8_gene_median_tpm.gct` must be downloaded from the [GTEx portal](https://www.gtexportal.org/home/datasets) and saved in the `raw` folder
+
+```{r load_gtex}
+# Build matrix from GTEx
+gct <- read_tsv('../raw/GTEx_Analysis_2016-01-15_v7_RNASeQCv1.1.8_gene_median_tpm.gct', 
+                skip=2, col_types=cols())
+mat <- gct[, 3:ncol(gct)] %>% as.matrix
+rownames(mat) <- gct$gene_id
+```
+
+Next, we run quantile normalization on the expression matrix to even out the per-sample distributions.
+
+```{r quantile_norm}
+# row and column names are lost after running quantile normalisation
+# save them here to add them back to the matrix
+rn <- rownames(mat)
+cn <- colnames(mat)
+
+# perform quantile normalisation
+mat <- normalize.quantiles(mat)
+rownames(mat) <- rn
+colnames(mat) <- cn
+
+mat[1:3, 1:3]
+```
+
+Now we load our gene list of interest into `symbols`
+
+```{r}
+symbols <- c('GAPDH', 'TP53')
+```
+
+Next, extract the gene list of interest from the data matrix and save. We save a log2-transformed values, adding a fudge factor of 2^-10 to avoid taking log of zero and set the floor to -10.
+
+```{r}
+# Extract genes and annotate with status
+genes <- gct %>%
+  select(gene_id, Description) %>%
+  mutate(gene_of_interest = Description %in% symbols) %>%
+  mutate(status = ifelse(gene_of_interest, 'Gene of interest', 'All genes')) %>%
+  select(gene_id, symbol=Description, gene_of_interest, status)
+
+df <- mat %>%
+  as.data.frame %>%
+  tibble::rownames_to_column('gene_id') %>%
+  gather('tissue', 'tpm', -gene_id) %>%
+  inner_join(genes, by='gene_id') %>%
+  mutate(log2_tpm = log2(tpm + 1/1024)) %>%
+  select(gene_id, symbol, gene_of_interest, status, tissue, tpm, log2_tpm)
+
+# Write expression to csv
+df %>%
+  filter(gene_of_interest) %>%
+  write_csv('../data/selected_genes.tpm.gtex.csv')
+
+head(df)
+```
+
+# Analysis
+
+## Characterize distributions
+Let's check the distributions of the tpm data from GTEx across tissues.
+```{r}
+ggplot(df) + 
+  geom_boxplot(aes(x=tissue, y=log2_tpm)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle('All genes')
+```
+
+Note that quantile normalization "squared" off the boxplot heights. Also note that we used a fudge factor of 1/1024 for the log transform, which sets the zeros to `log2(1/1024) = log2(1/2^10) = -10` (rather than -Inf), so the floor at -10 represents zero expression. In practical situations, a value of TPM = 1 is often used as a low expression threshold, but since this cutoff would exclude a majority of genes, we chose -10 as the floor.
+
+Let's narrow our focus to the genes:
+```{r}
+df %>% 
+  filter(gene_of_interest) %>%
+  ggplot + 
+  geom_boxplot(aes(x=tissue, y=log2_tpm)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle('Genes of interest')
+```
+
+Note any difference in distribution between genes of interest and the rest of the genome.
+
+A density plot further illustrates the point:
+
+```{r}
+df %>% 
+  ggplot +
+  geom_density(aes(x=log2_tpm, color=status))
+```
+
+Note whether genes of interest (blue) are different than other transcripts (red).
+
+
+## Expression heatmap
+```{r, fig.height=10, fig.width=8}
+# Get gene IDs and filter matrix
+gene_ <- genes %>% 
+  filter(gene_of_interest) %>%
+  .$gene_id
+mat_filt <- mat[gene_,]
+
+# Set up matrix for plotting
+zero_rows <- rowSums(mat_filt) == 0
+nonzero_mat <- mat_filt[!zero_rows,]
+mat_filt_log2 <- log2(nonzero_mat + 1/1024)
+
+# Plot the heatmap
+pheatmap(mat_filt_log2, show_rownames = F)
+```
+
+Inspecting the heatmap by eye, note any obvious blocks of ubiquitously expressed, ubiquitously non-expressed, and tissue-specific genes. Often brain and testis have the largest blocks of tissue-specific genes, but other tissue specific gene clusters can often be seen as well. 
+
+
+
