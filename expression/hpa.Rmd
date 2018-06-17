@@ -1,0 +1,93 @@
+---
+title: "Expression analysis using the Human Protein Atlas"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(knitr)
+library(ggplot2)
+library(tidyverse)
+```
+
+This notebook uses data available from the [Human Protein Atlas](https://www.proteinatlas.org/about) (HPA) to answer questions about the expression specificity of genes and proteins in tissues and cells.
+
+Data from the HPA can be downloaded from the "[Downloadable data](https://www.proteinatlas.org/about/download)" page. For proteomics data download `normal_tissue.tsv.zip` and for subcellular locationalisation data download `subcellular_location.tsv.zip`.
+
+```{bash eval=FALSE}
+# download, unzip, and remove the zip tissue data
+wget https://www.proteinatlas.org/download/normal_tissue.tsv.zip -O ../raw/normal_tissue.tsv.zip
+unzip ../raw/normal_tissue.tsv.zip -d ../raw
+rm ../raw/normal_tissue.tsv.zip
+
+# download, unzip, and remove the subcellular location data
+wget https://www.proteinatlas.org/download/subcellular_location.tsv.zip -O ../raw/subcellular_location.tsv.zip
+unzip ../raw/subcellular_location.tsv.zip -d ../raw
+rm ../raw/subcellular_location.tsv.zip
+```
+
+# Subcellular localisation
+
+The subcellular localisation of proteins is based on immunofluorescently stained cells. The tab-delimited file contains 12,073 proteins with information on the gene and the localisation.
+
+```{r read_subcellular}
+subcellular <- read_tsv('../raw/subcellular_location.tsv')
+dim(subcellular)
+head(subcellular)
+```
+
+There are four levels of reliability: "Approved", "Enhanced", "Supported", and "Uncertain".
+
+```{r table_reliability}
+table(subcellular$Reliability)
+```
+
+Subcellular compartment information is stored in four columns, with the column name reflecting the level of reliability: enhanced locations (`Enhanced`), supported locations (`Supported`), Approved locations (`Approved`), and uncertain locations (`Uncertain`).
+
+A protein can have more than one approved location.
+
+```{r location_info}
+subcellular %>%
+  filter(Reliability == "Approved") %>%
+  filter(grepl('Cytosol', Approved)) %>%
+  select(Gene, Approved) %>%
+  head()
+```
+
+# Tissue specificity
+
+HPA also provides cell and tissue expression profiles for proteins based on immunohistochemisty using tissue microarrays.
+
+```{r load_tissue_spec}
+tissue <- read_tsv('../raw/normal_tissue.tsv')
+dim(tissue)
+head(tissue)
+```
+
+The data is qualitative and the expression level is stored in the `Level` column. There are four expression levels: "High", "Medium", "Low", and "Not detected".
+
+```{r tissue_level}
+table(tissue$Level)
+```
+
+The bar plot tallies the different levels of expression and colouring each observation by their reliability (the same four levels as the subcellular localisation data).
+  
+```{r barplot_level_reliability}
+tissue %>%
+  mutate(Level = factor(Level, levels=c('Not detected', 'Low', 'Medium', 'High'))) %>%
+  mutate(Reliability = factor(Reliability, levels=c('Uncertain', 'Supported', 'Enhanced', 'Approved'))) %>%
+  ggplot(aes(x=Level, fill=Reliability)) +
+  geom_bar() +
+  labs(title='Protein observations, by level and reliability', y='Num observations')
+```
+
+The `Not detected` level has the highest number of observations and most have an `Approved` or `Enhanced` reliability. The following definitions for the Reliability scores were copied from the [HPA documentation](https://www.proteinatlas.org/about/assays+annotation#ifr).
+
+* `Enhanced` - One or more antibodies are enhanced validated and there is no contradicting data, for example literature describes experimental evidence for a different location.
+* `Supported` - There is no enhanced validation of the used antibody, but the annotated localization is reported in literature.
+* `Approved` - If the localization of the protein has not been previously described and was detected by only one antibody without additional antibody validation.
+* `Uncertain` - If the antibody-staining pattern contradicts experimental data or no expression is detected on the RNA level.
+
